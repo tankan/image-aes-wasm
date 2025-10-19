@@ -1,4 +1,5 @@
 const ImageService = require('../services/imageService');
+const JWTUtils = require('../utils/jwt');
 const { validationResult } = require('express-validator');
 
 /**
@@ -8,6 +9,7 @@ const { validationResult } = require('express-validator');
 class ImageController {
   constructor() {
     this.imageService = new ImageService();
+    this.jwtUtils = new JWTUtils();
   }
 
   /**

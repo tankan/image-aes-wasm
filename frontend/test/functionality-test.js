@@ -35,16 +35,9 @@ class FunctionalityTester {
     const key = CryptoJS.enc.Base64.parse(keyBase64);
     const iv = CryptoJS.enc.Base64.parse(ivBase64);
     
-    // 将Uint8Array转换为WordArray
-    const words = [];
-    for (let i = 0; i < data.length; i += 4) {
-      let word = 0;
-      for (let j = 0; j < 4 && i + j < data.length; j++) {
-        word |= data[i + j] << (24 - j * 8);
-      }
-      words.push(word);
-    }
-    const wordArray = CryptoJS.lib.WordArray.create(words, data.length);
+    // 使用标准的CryptoJS方法转换Uint8Array为WordArray
+    // 这确保与WASM解密的兼容性
+    const wordArray = CryptoJS.lib.WordArray.create(data);
     
     // 加密
     const encrypted = CryptoJS.AES.encrypt(wordArray, key, {
@@ -53,15 +46,16 @@ class FunctionalityTester {
       padding: CryptoJS.pad.Pkcs7
     });
     
-    // 转换为Uint8Array
-    const encryptedWords = encrypted.ciphertext.words;
-    const encryptedBytes = encrypted.ciphertext.sigBytes;
-    const result = new Uint8Array(encryptedBytes);
+    // 使用标准方法转换为Uint8Array
+    const encryptedWordArray = encrypted.ciphertext;
+    const result = new Uint8Array(encryptedWordArray.sigBytes);
     
-    for (let i = 0; i < encryptedBytes; i++) {
+    // 标准的WordArray到Uint8Array转换
+    const words = encryptedWordArray.words;
+    for (let i = 0; i < encryptedWordArray.sigBytes; i++) {
       const wordIndex = Math.floor(i / 4);
       const byteIndex = i % 4;
-      result[i] = (encryptedWords[wordIndex] >>> (24 - byteIndex * 8)) & 0xFF;
+      result[i] = (words[wordIndex] >>> (24 - byteIndex * 8)) & 0xFF;
     }
     
     return result;

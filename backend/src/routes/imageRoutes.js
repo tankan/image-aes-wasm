@@ -114,6 +114,35 @@ router.get('/verify-key/:imageId',
   imageController.verifyKeyAccess.bind(imageController)
 );
 
+// 生成图片访问token
+router.post('/generate-image-token', 
+  authMiddleware.verifyToken(),
+  async (req, res) => {
+    try {
+      const { imageId } = req.body;
+      const userId = req.user.userId;
+      
+      if (!imageId) {
+        return res.status(400).json({ error: '缺少图片ID' });
+      }
+      
+      // 验证用户是否有权限访问该图片
+      const metadata = await imageController.imageService.getMetadata(imageId);
+      if (!metadata || metadata.userId !== userId) {
+        return res.status(403).json({ error: '无权限访问该图片' });
+      }
+      
+      // 生成图片访问token
+      const token = imageController.jwtUtils.generateImageToken(userId, imageId);
+      
+      res.json({ token });
+    } catch (error) {
+      console.error('生成图片访问token失败:', error);
+      res.status(500).json({ error: '生成访问token失败' });
+    }
+  }
+);
+
 // 获取用户图片列表 - 需要认证
 router.get('/images',
   securityMiddleware.checkIPBlock(),

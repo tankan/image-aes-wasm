@@ -37,7 +37,7 @@ class CanvasRenderer {
       throw new Error('Canvas元素未找到');
     }
 
-    this.ctx = this.canvas.getContext('2d');
+    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
     this.watermarkEnabled = watermark;
     this.protectionEnabled = protection;
     this.maxWidth = maxWidth;

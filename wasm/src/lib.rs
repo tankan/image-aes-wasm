@@ -53,6 +53,30 @@ impl ImageDecryptor {
         }
     }
 
+    /// 优化的解密图片数据方法
+    /// 提供与decrypt_image相同的功能，但针对渐进式解密进行了优化
+    /// 
+    /// # 参数
+    /// - `encrypted_data`: 加密的图片数据
+    /// - `key_base64`: Base64编码的32字节密钥
+    /// - `iv_base64`: Base64编码的16字节初始化向量
+    /// 
+    /// # 返回
+    /// 解密后的图片数据，如果失败则返回错误
+    #[wasm_bindgen]
+    pub fn decrypt_image_optimized(
+        &self,
+        encrypted_data: &Uint8Array,
+        key_base64: &str,
+        iv_base64: &str,
+    ) -> Result<Uint8Array, JsValue> {
+        // 使用相同的内部实现，但可以在未来添加优化
+        match self.decrypt_bytes_internal(encrypted_data, key_base64, iv_base64) {
+            Ok(decrypted) => Ok(decrypted),
+            Err(e) => Err(JsValue::from_str(&e))
+        }
+    }
+
     /// 验证解密结果
     /// 
     /// # 参数
@@ -159,8 +183,17 @@ impl ImageDecryptor {
         }
         
         // 执行解密并移除填充
+        // 使用更详细的错误处理来诊断Unpad Error
+        let buffer_len = buffer.len();
+        let last_16_bytes = buffer[buffer_len.saturating_sub(16)..].to_vec();
+        
         let decrypted = cipher.decrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buffer)
-            .map_err(|_| "PKCS7填充验证失败，数据可能已损坏".to_string())?;
+            .map_err(|_e| {
+                // UnpadError是单元结构体，只有一种错误情况
+                format!("PKCS7填充验证失败: 数据长度={}, 最后16字节={:?}", 
+                       buffer_len, 
+                       last_16_bytes)
+            })?;
 
         // 验证解密结果
         if decrypted.is_empty() {

@@ -93,7 +93,7 @@ class WasmLoader {
       // 优先使用ES模块方式加载（现代浏览器推荐）
       if (this._supportsESModules()) {
         try {
-          const wasmModule = await import(`${wasmDir}/image_aes_wasm.js`);
+          const wasmModule = await import(/* @vite-ignore */ `${wasmDir}/image_aes_wasm.js`);
           if (wasmModule.default) {
             await wasmModule.default({
               module_or_path: wasmBgPath
@@ -155,7 +155,7 @@ class WasmLoader {
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = wasmPath;
-      script.type = 'text/javascript';
+      script.type = 'module'; // 使用ES模块类型
       
       // 记录脚本元素以便后续清理
       this.loadedScripts.push(script);
@@ -163,18 +163,18 @@ class WasmLoader {
 
       script.onload = async () => {
         try {
-          // 检查全局函数是否可用（移除硬编码延迟）
-          if (typeof window.wasm_bindgen !== 'function') {
-            reject(new Error('wasm_bindgen函数未在全局作用域中找到'));
-            return;
-          }
-
-          // 初始化WASM模块
-          await window.wasm_bindgen({
-            module_or_path: wasmBgPath
-          });
+          // 对于ES模块，我们需要动态导入
+          const wasmModule = await import(/* @vite-ignore */ wasmPath);
           
-          resolve(window.wasm_bindgen);
+          if (wasmModule.default) {
+            // 初始化WASM模块
+            await wasmModule.default({
+              module_or_path: wasmBgPath
+            });
+            resolve(wasmModule);
+          } else {
+            reject(new Error('WASM模块没有默认导出'));
+          }
         } catch (error) {
           reject(new Error(`WASM初始化失败: ${error.message}`));
         }

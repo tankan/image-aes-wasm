@@ -242,6 +242,36 @@ class ImageViewer {
   }
 
   /**
+   * 为指定图片生成一次性访问token
+   * @param {string} imageId - 图片ID
+   * @param {string} userToken - 用户认证token
+   * @returns {Promise<Object>} 生成结果
+   */
+  async generateOneTimeToken(imageId, userToken) {
+    try {
+      const response = await this.apiClient._request('/api/generate-image-token', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${userToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ imageId })
+      });
+
+      return {
+        success: true,
+        data: response
+      };
+    } catch (error) {
+      console.error('生成图片访问token失败:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * 获取用户图片列表
    * @param {string} userId - 用户ID
    * @param {string} token - 访问令牌

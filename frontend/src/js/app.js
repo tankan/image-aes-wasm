@@ -415,15 +415,34 @@ class App {
   /**
    * 选择图片库中的图片
    */
-  selectGalleryImage(imageId) {
+  async selectGalleryImage(imageId) {
     const userId = document.getElementById('galleryUserId').value;
     const token = document.getElementById('galleryToken').value;
     
-    // 切换到查看选项卡并填充信息
-    this.switchTab('view');
-    document.getElementById('viewImageId').value = imageId;
-    document.getElementById('viewUserId').value = userId;
-    document.getElementById('viewToken').value = token;
+    try {
+      // 为选中的图片生成专用的访问token
+      this.showNotification('正在生成图片访问令牌...', 'info');
+      
+      const tokenResult = await this.#imageViewer.generateOneTimeToken(imageId, token);
+      
+      if (!tokenResult.success) {
+        throw new Error(tokenResult.error || '生成访问令牌失败');
+      }
+      
+      // 切换到查看选项卡并填充信息
+      this.switchTab('view');
+      document.getElementById('viewImageId').value = imageId;
+      document.getElementById('viewUserId').value = userId;
+      document.getElementById('viewToken').value = tokenResult.data.token;
+      
+      this.showNotification('访问令牌生成成功，正在加载图片...', 'success');
+      
+      // 自动加载图片
+      this.handleLoadImage();
+    } catch (error) {
+      this.showNotification(`切换到图片查看失败: ${error.message}`, 'error');
+      console.error('选择图片失败:', error);
+    }
   }
 
   /**
