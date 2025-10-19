@@ -1,0 +1,34 @@
+[package]
+name = "image-aes-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2.104"
+js-sys = "0.3.81"
+aes = "0.8.4"
+cbc = "0.1.2"
+base64 = "0.22.1"
+console_error_panic_hook = "0.1.7"
+
+[dependencies.web-sys]
+version = "0.3.81"
+features = [
+  "console",
+  "Performance",
+  "Window",
+]
+
+# 针对WASM目标的特殊配置
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.104"
+
+[profile.release]
+# 优化 WASM 包大小
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

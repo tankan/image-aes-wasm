@@ -1,0 +1,39 @@
+{
+  "name": "image-aes-backend",
+  "version": "1.0.0",
+  "description": "图片加密系统后端服务",
+  "main": "src/app.js",
+  "scripts": {
+    "dev": "nodemon src/app.js",
+    "start": "node src/app.js",
+    "build": "echo 'Backend build completed'",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "helmet": "^8.1.0",
+    "morgan": "^1.10.1",
+    "multer": "^2.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^3.0.2",
+    "express-rate-limit": "^8.1.0",
+    "express-validator": "^7.2.1",
+    "dotenv": "^17.2.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "jest": "^30.2.0",
+    "supertest": "^7.1.3"
+  },
+  "keywords": [
+    "encryption",
+    "image",
+    "aes",
+    "security",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

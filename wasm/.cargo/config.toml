@@ -1,0 +1,13 @@
+[build]
+# 默认构建目标为WASM
+target = "wasm32-unknown-unknown"
+
+# WASM目标配置
+[target.wasm32-unknown-unknown]
+# 使用wasm-ld链接器而不是系统链接器
+linker = "wasm-ld"
+
+# 避免使用Windows MSVC链接器
+[target.x86_64-pc-windows-msvc]
+# 如果需要本地构建，可以配置替代链接器
+# linker = "lld-link"

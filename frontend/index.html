@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>跨平台高性能图片加密/解密系统</title>
+    <link rel="stylesheet" href="src/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="title">
+                    <span class="icon">🔐</span>
+                    图片加密系统
+                    <span class="subtitle">高性能 · 跨平台 · 安全</span>
+                </h1>
+                <div class="system-info">
+                    <div class="info-item">
+                        <span class="label">解密引擎:</span>
+                        <span id="decryptorMode" class="value">检测中...</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">WASM支持:</span>
+                        <span id="wasmSupport" class="value">检测中...</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="main">
+            <!-- 功能选项卡 -->
+            <div class="tabs">
+                <button class="tab-button active" data-tab="upload">图片上传</button>
+                <button class="tab-button" data-tab="view">图片查看</button>
+                <button class="tab-button" data-tab="gallery">图片库</button>
+                <button class="tab-button" data-tab="test">系统测试</button>
+            </div>
+
+            <!-- 上传页面 -->
+            <div id="upload" class="tab-content active">
+                <div class="upload-section">
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon">📁</div>
+                        <div class="upload-text">
+                            <p>拖拽图片到此处或点击选择文件</p>
+                            <p class="upload-hint">支持 JPG、PNG、GIF、WebP 格式，最大 10MB</p>
+                        </div>
+                        <input type="file" id="fileInput" accept="image/*" style="display: none;">
+                    </div>
+                    
+                    <div class="user-input">
+                        <label for="userId">用户ID:</label>
+                        <input type="text" id="userId" placeholder="输入用户ID（可选）" value="demo-user">
+                    </div>
+
+                    <div class="progress-section" id="progressSection" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <div class="progress-text" id="progressText">准备中...</div>
+                    </div>
+
+                    <div class="result-section" id="uploadResult" style="display: none;">
+                        <h3>上传成功</h3>
+                        <div class="result-info">
+                            <div class="info-row">
+                                <span class="label">图片ID:</span>
+                                <span class="value" id="resultImageId"></span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">文件大小:</span>
+                                <span class="value" id="resultFileSize"></span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">加密后大小:</span>
+                                <span class="value" id="resultEncryptedSize"></span>
+                            </div>
+                        </div>
+                        <div class="result-actions">
+                            <button id="viewUploadedImage" class="btn btn-primary">查看图片</button>
+                            <button id="copyImageId" class="btn btn-secondary">复制图片ID</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 查看页面 -->
+            <div id="view" class="tab-content">
+                <div class="view-section">
+                    <div class="view-controls">
+                        <div class="input-group">
+                            <label for="viewImageId">图片ID:</label>
+                            <input type="text" id="viewImageId" placeholder="输入图片ID">
+                        </div>
+                        <div class="input-group">
+                            <label for="viewUserId">用户ID:</label>
+                            <input type="text" id="viewUserId" placeholder="输入用户ID" value="demo-user">
+                        </div>
+                        <div class="input-group">
+                            <label for="viewToken">访问令牌:</label>
+                            <input type="text" id="viewToken" placeholder="输入访问令牌">
+                        </div>
+                        <button id="loadImageBtn" class="btn btn-primary">加载图片</button>
+                    </div>
+
+                    <div class="view-progress" id="viewProgress" style="display: none;">
+                        <div class="progress-stages">
+                            <div class="stage" data-stage="key">
+                                <div class="stage-icon">🔑</div>
+                                <div class="stage-text">获取密钥</div>
+                                <div class="stage-progress"></div>
+                            </div>
+                            <div class="stage" data-stage="download">
+                                <div class="stage-icon">⬇️</div>
+                                <div class="stage-text">下载文件</div>
+                                <div class="stage-progress"></div>
+                            </div>
+                            <div class="stage" data-stage="decrypt">
+                                <div class="stage-icon">🔓</div>
+                                <div class="stage-text">解密处理</div>
+                                <div class="stage-progress"></div>
+                            </div>
+                            <div class="stage" data-stage="render">
+                                <div class="stage-icon">🖼️</div>
+                                <div class="stage-text">渲染显示</div>
+                                <div class="stage-progress"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="canvas-container">
+                        <canvas id="imageCanvas" width="800" height="600"></canvas>
+                        <div class="canvas-overlay" id="canvasOverlay" style="display: none;">
+                            <div class="overlay-content">
+                                <div class="loading-spinner"></div>
+                                <div class="overlay-text">加载中...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="image-info" id="imageInfo" style="display: none;">
+                        <h3>图片信息</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="label">原始尺寸:</span>
+                                <span class="value" id="originalSize"></span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">显示尺寸:</span>
+                                <span class="value" id="displaySize"></span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">解密引擎:</span>
+                                <span class="value" id="decryptEngine"></span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">处理时间:</span>
+                                <span class="value" id="processTime"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 图片库页面 -->
+            <div id="gallery" class="tab-content">
+                <div class="gallery-section">
+                    <div class="gallery-controls">
+                        <div class="input-group">
+                            <label for="galleryUserId">用户ID:</label>
+                            <input type="text" id="galleryUserId" placeholder="输入用户ID" value="demo-user">
+                        </div>
+                        <div class="input-group">
+                            <label for="galleryToken">访问令牌:</label>
+                            <input type="text" id="galleryToken" placeholder="输入访问令牌">
+                        </div>
+                        <button id="loadGalleryBtn" class="btn btn-primary">加载图片库</button>
+                    </div>
+
+                    <div class="gallery-grid" id="galleryGrid">
+                        <div class="gallery-placeholder">
+                            <div class="placeholder-icon">🖼️</div>
+                            <div class="placeholder-text">暂无图片</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 测试页面 -->
+            <div id="test" class="tab-content">
+                <div class="test-section">
+                    <div class="test-controls">
+                        <button id="runSystemTest" class="btn btn-primary">运行系统测试</button>
+                        <button id="runPerformanceTest" class="btn btn-secondary">性能测试</button>
+                        <button id="clearTestResults" class="btn btn-outline">清除结果</button>
+                    </div>
+
+                    <div class="test-results" id="testResults">
+                        <div class="test-placeholder">
+                            <div class="placeholder-icon">🧪</div>
+                            <div class="placeholder-text">点击按钮开始测试</div>
+                        </div>
+                    </div>
+
+                    <div class="performance-info" id="performanceInfo" style="display: none;">
+                        <h3>性能信息</h3>
+                        <div class="perf-grid">
+                            <div class="perf-item">
+                                <span class="label">解密模式:</span>
+                                <span class="value" id="perfDecryptorMode"></span>
+                            </div>
+                            <div class="perf-item">
+                                <span class="label">WASM支持:</span>
+                                <span class="value" id="perfWasmSupport"></span>
+                            </div>
+                            <div class="perf-item">
+                                <span class="label">SIMD支持:</span>
+                                <span class="value" id="perfSimdSupport"></span>
+                            </div>
+                            <div class="perf-item">
+                                <span class="label">设备内存:</span>
+                                <span class="value" id="perfDeviceMemory"></span>
+                            </div>
+                            <div class="perf-item">
+                                <span class="label">CPU核心:</span>
+                                <span class="value" id="perfCpuCores"></span>
+                            </div>
+                            <div class="perf-item">
+                                <span class="label">JS堆内存:</span>
+                                <span class="value" id="perfJsMemory"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 底部 -->
+        <footer class="footer">
+            <div class="footer-content">
+                <div class="footer-info">
+                    <p>跨平台高性能图片加密/解密系统 v1.0.0</p>
+                    <p>技术栈: Node.js + Rust WebAssembly + AES-256-CBC</p>
+                </div>
+                <div class="footer-links">
+                    <a href="#" onclick="showAbout()">关于</a>
+                    <a href="#" onclick="showHelp()">帮助</a>
+                    <a href="https://github.com" target="_blank">GitHub</a>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 通知系统 -->
+    <div id="notifications" class="notifications"></div>
+
+    <!-- 模态框 -->
+    <div id="modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">标题</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                内容
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脚本 -->
+    <script type="module" src="src/js/app.js"></script>
+</body>
+</html>
