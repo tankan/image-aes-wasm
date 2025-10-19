@@ -1,14 +1,18 @@
+import { getConfig } from './config.js';
+
 /**
  * WebAssembly 加载器
  * 负责动态加载和初始化 Rust WASM 模块
  */
 class WasmLoader {
-  constructor() {
-    this.wasmModule = null;
-    this.isLoaded = false;
-    this.isLoading = false;
-    this.loadPromise = null;
-  }
+    constructor() {
+        this.wasmModule = null;
+        this.isLoaded = false;
+        this.loadedScripts = []; // 添加这个属性来跟踪加载的脚本
+        this.isLoading = false;
+        this.loadPromise = null;
+        this.scriptElement = null; // 跟踪已加载的script元素
+    }
 
   /**
    * 检测 WASM 支持
@@ -47,7 +51,7 @@ class WasmLoader {
    * @param {string} wasmPath - WASM 文件路径
    * @returns {Promise<Object>} WASM 模块实例
    */
-  async loadWasm(wasmPath = '/wasm/image_aes_wasm.js') {
+  async loadWasm(wasmPath = getConfig('wasm.defaultPath', '/wasm/image_aes_wasm.js')) {
     if (this.isLoaded && this.wasmModule) {
       return this.wasmModule;
     }
@@ -73,49 +77,118 @@ class WasmLoader {
   }
 
   /**
-   * 内部加载方法
+   * 内部加载方法 - 优化版本
+   * 移除双重加载策略，使用单一高效的加载方式
    * @private
    */
   async _loadWasmModule(wasmPath) {
     try {
-      // 动态导入 WASM 模块
-      const wasmModule = await import(wasmPath);
+      // 清理之前的资源
+      this._cleanupPreviousLoad();
+
+      // 从完整路径中提取目录路径
+      const wasmDir = wasmPath.replace('/image_aes_wasm.js', '');
+      const wasmBgPath = `${wasmDir}/image_aes_wasm_bg.wasm`;
+
+      // 优先使用ES模块方式加载（现代浏览器推荐）
+      if (this._supportsESModules()) {
+        try {
+          const wasmModule = await import(`${wasmDir}/image_aes_wasm.js`);
+          if (wasmModule.default) {
+            await wasmModule.default({
+              module_or_path: wasmBgPath
+            });
+            return wasmModule;
+          }
+        } catch (esModuleError) {
+          console.warn('ES模块加载失败，回退到脚本加载:', esModuleError.message);
+        }
+      }
+
+      // 回退到传统脚本加载方式
+      return await this._loadViaScript(wasmPath, wasmBgPath);
       
-      // 初始化 WASM
-      await wasmModule.default();
-      
-      // 返回模块导出
-      return wasmModule;
     } catch (error) {
-      // 如果动态导入失败，尝试传统方式加载
-      return this._loadWasmFallback(wasmPath);
+      throw new Error(`WASM模块加载失败: ${error.message}`);
     }
   }
 
   /**
-   * 备用加载方式
+   * 清理之前的加载资源
    * @private
    */
-  async _loadWasmFallback(wasmPath) {
+  _cleanupPreviousLoad() {
+    // 清理之前的脚本元素
+    const existingScript = document.querySelector(`script[src*="image_aes_wasm.js"]`);
+    if (existingScript) {
+      existingScript.remove();
+    }
+
+    // 清理全局变量
+    if (window.wasm_bindgen) {
+      delete window.wasm_bindgen;
+    }
+
+    // 清理跟踪的脚本
+    this.loadedScripts.forEach(script => {
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    });
+    this.loadedScripts = [];
+  }
+
+  /**
+   * 检测ES模块支持
+   * @private
+   */
+  _supportsESModules() {
+    const script = document.createElement('script');
+    return 'noModule' in script;
+  }
+
+  /**
+   * 通过脚本标签加载WASM
+   * @private
+   */
+  async _loadViaScript(wasmPath, wasmBgPath) {
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = wasmPath;
+      script.type = 'text/javascript';
+      
+      // 记录脚本元素以便后续清理
+      this.loadedScripts.push(script);
+      this.scriptElement = script;
+
       script.onload = async () => {
         try {
-          if (typeof wasm_bindgen !== 'undefined') {
-            await wasm_bindgen();
-            resolve(wasm_bindgen);
-          } else {
-            reject(new Error('WASM 绑定未找到'));
+          // 检查全局函数是否可用（移除硬编码延迟）
+          if (typeof window.wasm_bindgen !== 'function') {
+            reject(new Error('wasm_bindgen函数未在全局作用域中找到'));
+            return;
           }
+
+          // 初始化WASM模块
+          await window.wasm_bindgen({
+            module_or_path: wasmBgPath
+          });
+          
+          resolve(window.wasm_bindgen);
         } catch (error) {
-          reject(error);
+          reject(new Error(`WASM初始化失败: ${error.message}`));
         }
       };
-      script.onerror = () => reject(new Error('WASM 脚本加载失败'));
+      
+      script.onerror = () => {
+        reject(new Error('WASM JavaScript文件加载失败'));
+      };
+      
       document.head.appendChild(script);
     });
   }
+
+
 
   /**
    * 获取 WASM 模块信息
@@ -146,6 +219,17 @@ class WasmLoader {
    * 卸载 WASM 模块
    */
   unloadWasm() {
+    // 清理script元素
+    if (this.scriptElement && this.scriptElement.parentNode) {
+      this.scriptElement.parentNode.removeChild(this.scriptElement);
+      this.scriptElement = null;
+    }
+    
+    // 清理全局变量
+    if (typeof window.wasm_bindgen !== 'undefined') {
+      delete window.wasm_bindgen;
+    }
+    
     this.wasmModule = null;
     this.isLoaded = false;
     this.isLoading = false;

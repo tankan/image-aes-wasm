@@ -7,6 +7,26 @@ require('dotenv').config();
 
 const imageRoutes = require('./routes/imageRoutes');
 const SecurityMiddleware = require('./middleware/security');
+const KeyValidator = require('./utils/keyValidator');
+
+// 验证环境变量中的密钥安全性
+const keyValidation = KeyValidator.validateEnvironmentKeys(process.env);
+if (!keyValidation.valid) {
+  console.error('❌ 密钥验证失败:');
+  keyValidation.issues.forEach(issue => console.error(`  - ${issue}`));
+  
+  if (process.env.NODE_ENV === 'production') {
+    console.error('🚨 生产环境不能使用不安全的密钥配置！');
+    process.exit(1);
+  } else {
+    console.warn('⚠️  开发环境检测到不安全的密钥配置，建议修复');
+  }
+}
+
+if (keyValidation.warnings.length > 0) {
+  console.warn('⚠️  密钥配置警告:');
+  keyValidation.warnings.forEach(warning => console.warn(`  - ${warning}`));
+}
 
 const app = express();
 const securityMiddleware = new SecurityMiddleware();

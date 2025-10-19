@@ -32,10 +32,23 @@ cargo install wasm-pack
 ```
 
 #### 4. 编译 WASM 模块
+
+**推荐命令（no-modules 目标，兼容性最佳）**:
+```bash
+cd wasm
+wasm-pack build --target no-modules --out-dir ../frontend/public/wasm
+```
+
+**备选命令（web 目标，需要模块支持）**:
 ```bash
 cd wasm
 wasm-pack build --target web --out-dir ../frontend/public/wasm
 ```
+
+**说明**:
+- `--target no-modules`: 生成传统浏览器兼容的 JavaScript，无需 ES 模块支持
+- `--target web`: 生成 ES 模块格式，需要现代浏览器和模块加载器支持
+- 推荐使用 `no-modules` 目标以获得最佳兼容性
 
 ### 方案二：使用预编译方案（快速部署）
 
@@ -51,7 +64,7 @@ wasm-pack build --target web --out-dir ../frontend/public/wasm
 - ✅ **前端**: Vite 开发服务器正常运行  
 - ✅ **加密**: 后端 AES-256-CBC 加密正常
 - ✅ **解密**: 前端 CryptoJS 降级解密正常
-- ⚠️ **WASM**: 高性能模块未编译（可选）
+- ✅ **WASM**: 高性能模块已编译并可用
 
 ## 性能对比
 
@@ -62,16 +75,27 @@ wasm-pack build --target web --out-dir ../frontend/public/wasm
 
 ## 建议
 
-- **生产环境**: 使用 CryptoJS 方案，兼容性好，性能足够
-- **开发环境**: 可选择安装 Rust 获得最佳性能
-- **CI/CD**: 建议使用 CryptoJS 避免构建环境复杂性
+- **生产环境**: 使用 WASM 方案获得最佳性能，CryptoJS 作为降级备选
+- **开发环境**: 推荐安装 Rust 获得完整开发体验
+- **CI/CD**: 可以选择预编译 WASM 或使用 CryptoJS 降级
 
 ## 验证系统功能
 
 当前系统完全可用，可以：
 1. 上传并加密图片
-2. 查看和解密图片  
+2. 查看和解密图片（WASM 或 CryptoJS）
 3. 管理图片库
 4. 运行系统测试
+5. 获得高性能 WASM 解密体验
 
-无需等待 WASM 编译即可使用完整功能。
+## 故障排除
+
+### WASM 编译问题
+- 确保使用 `--target no-modules` 以获得最佳兼容性
+- 如果遇到链接器问题，检查 `.cargo/config.toml` 中的链接器配置
+- 使用 `--allow-dirty` 选项运行 `cargo fix` 清理代码警告
+
+### 前端加载问题
+- WASM 文件应位于 `frontend/public/wasm/` 目录
+- 确保 `wasmLoader.js` 使用正确的加载方式
+- 检查浏览器控制台是否有加载错误

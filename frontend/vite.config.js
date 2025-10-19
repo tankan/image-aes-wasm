@@ -29,6 +29,8 @@ export default defineConfig({
   worker: {
     format: 'es'
   },
+  // 添加WASM支持
+  assetsInclude: ['**/*.wasm'],
   // Vite 7.x 新增的实验性特性
   experimental: {
     renderBuiltUrl(filename, { hostType }) {

@@ -1,8 +1,8 @@
 use wasm_bindgen::prelude::*;
-use js_sys::{Uint8Array, Promise};
-use web_sys::console;
+use wasm_bindgen::JsCast;
+use js_sys::Uint8Array;
 use aes::Aes256;
-use cbc::{Decryptor, cipher::{BlockDecryptMut, KeyIvInit}};
+use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use base64::{Engine as _, engine::general_purpose};
 
 // 当panic发生时，提供更好的错误信息
@@ -16,7 +16,7 @@ type Aes256CbcDec = cbc::Decryptor<Aes256>;
 /// 提供高性能的AES-256-CBC解密功能
 #[wasm_bindgen]
 pub struct ImageDecryptor {
-    chunk_size: usize,
+    // 移除chunk_size字段，因为CBC模式不支持真正的分块解密
 }
 
 #[wasm_bindgen]
@@ -27,23 +27,16 @@ impl ImageDecryptor {
         #[cfg(feature = "console_error_panic_hook")]
         set_panic_hook();
         
-        ImageDecryptor {
-            chunk_size: 1024 * 1024, // 1MB 分块大小
-        }
-    }
-
-    /// 设置分块大小（字节）
-    #[wasm_bindgen]
-    pub fn set_chunk_size(&mut self, size: usize) {
-        self.chunk_size = size.max(1024); // 最小1KB
+        ImageDecryptor {}
     }
 
     /// 解密图片数据
+    /// 使用AES-256-CBC算法进行高性能解密
     /// 
     /// # 参数
     /// - `encrypted_data`: 加密的图片数据
-    /// - `key_base64`: Base64编码的密钥
-    /// - `iv_base64`: Base64编码的初始化向量
+    /// - `key_base64`: Base64编码的32字节密钥
+    /// - `iv_base64`: Base64编码的16字节初始化向量
     /// 
     /// # 返回
     /// 解密后的图片数据，如果失败则返回错误
@@ -54,96 +47,10 @@ impl ImageDecryptor {
         key_base64: &str,
         iv_base64: &str,
     ) -> Result<Uint8Array, JsValue> {
-        // 解码Base64密钥和IV
-        let key = general_purpose::STANDARD
-            .decode(key_base64)
-            .map_err(|e| JsValue::from_str(&format!("密钥解码失败: {}", e)))?;
-        
-        let iv = general_purpose::STANDARD
-            .decode(iv_base64)
-            .map_err(|e| JsValue::from_str(&format!("IV解码失败: {}", e)))?;
-
-        // 验证密钥和IV长度
-        if key.len() != 32 {
-            return Err(JsValue::from_str("密钥长度必须为32字节"));
+        match self.decrypt_bytes_internal(encrypted_data, key_base64, iv_base64) {
+            Ok(decrypted) => Ok(decrypted),
+            Err(e) => Err(JsValue::from_str(&e))
         }
-        if iv.len() != 16 {
-            return Err(JsValue::from_str("IV长度必须为16字节"));
-        }
-
-        // 转换加密数据
-        let encrypted_bytes = encrypted_data.to_vec();
-        
-        // 执行解密
-        let decrypted = self.decrypt_bytes(&encrypted_bytes, &key, &iv)
-            .map_err(|e| JsValue::from_str(&e))?;
-
-        // 返回解密结果
-        Ok(Uint8Array::from(&decrypted[..]))
-    }
-
-    /// 分块解密大文件
-    /// 
-    /// # 参数
-    /// - `encrypted_data`: 加密的图片数据
-    /// - `key_base64`: Base64编码的密钥
-    /// - `iv_base64`: Base64编码的初始化向量
-    /// - `progress_callback`: 进度回调函数
-    /// 
-    /// # 返回
-    /// Promise，解析为解密后的数据
-    #[wasm_bindgen]
-    pub fn decrypt_image_chunked(
-        &self,
-        encrypted_data: &Uint8Array,
-        key_base64: &str,
-        iv_base64: &str,
-        progress_callback: Option<js_sys::Function>,
-    ) -> Promise {
-        let encrypted_bytes = encrypted_data.to_vec();
-        let key_str = key_base64.to_string();
-        let iv_str = iv_base64.to_string();
-        let chunk_size = self.chunk_size;
-
-        wasm_bindgen_futures::future_to_promise(async move {
-            // 解码密钥和IV
-            let key = general_purpose::STANDARD
-                .decode(&key_str)
-                .map_err(|e| JsValue::from_str(&format!("密钥解码失败: {}", e)))?;
-            
-            let iv = general_purpose::STANDARD
-                .decode(&iv_str)
-                .map_err(|e| JsValue::from_str(&format!("IV解码失败: {}", e)))?;
-
-            // 验证长度
-            if key.len() != 32 || iv.len() != 16 {
-                return Err(JsValue::from_str("密钥或IV长度不正确"));
-            }
-
-            // 分块解密
-            let total_size = encrypted_bytes.len();
-            let mut decrypted_data = Vec::new();
-            let mut processed = 0;
-
-            // 创建解密器
-            let mut cipher = Aes256CbcDec::new_from_slices(&key, &iv)
-                .map_err(|e| JsValue::from_str(&format!("创建解密器失败: {}", e)))?;
-
-            // 处理数据（注意：CBC模式需要完整处理，不能真正分块）
-            let mut buffer = encrypted_bytes.clone();
-            let decrypted = cipher.decrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buffer)
-                .map_err(|e| JsValue::from_str(&format!("解密失败: {}", e)))?;
-
-            decrypted_data.extend_from_slice(decrypted);
-
-            // 模拟进度更新（用于用户体验）
-            if let Some(callback) = progress_callback {
-                let progress = 100.0;
-                let _ = callback.call1(&JsValue::NULL, &JsValue::from_f64(progress));
-            }
-
-            Ok(JsValue::from(Uint8Array::from(&decrypted_data[..])))
-        })
     }
 
     /// 验证解密结果
@@ -158,14 +65,14 @@ impl ImageDecryptor {
         let data = decrypted_data.to_vec();
         
         if data.len() < 8 {
-            return js_sys::JSON::stringify(&js_sys::Object::new()).unwrap();
+            return js_sys::JSON::stringify(&js_sys::Object::new()).unwrap().into();
         }
 
-        let mut result = js_sys::Object::new();
+        let result = js_sys::Object::new();
         
         // 检测文件类型
         let file_type = self.detect_image_type(&data);
-        js_sys::Reflect::set(&result, &"fileType".into(), &file_type.into()).unwrap();
+        js_sys::Reflect::set(&result, &"fileType".into(), &JsValue::from_str(&file_type)).unwrap();
         
         // 验证文件头
         let is_valid = !file_type.is_empty();
@@ -180,14 +87,19 @@ impl ImageDecryptor {
     /// 获取性能统计信息
     #[wasm_bindgen]
     pub fn get_performance_info(&self) -> JsValue {
-        let mut info = js_sys::Object::new();
+        let info = js_sys::Object::new();
         
         // WASM特性检测
         js_sys::Reflect::set(&info, &"wasmSupported".into(), &true.into()).unwrap();
-        js_sys::Reflect::set(&info, &"chunkSize".into(), &(self.chunk_size as u32).into()).unwrap();
         
-        // 内存使用情况（简化版）
-        let memory_pages = wasm_bindgen::memory().buffer().byte_length() / (64 * 1024);
+        // 内存使用情况（简化实现）
+        let memory_pages = wasm_bindgen::memory()
+            .dyn_into::<js_sys::WebAssembly::Memory>()
+            .ok()
+            .and_then(|mem| mem.buffer().dyn_into::<js_sys::ArrayBuffer>().ok())
+            .map(|buf| buf.byte_length() / (64 * 1024))
+            .unwrap_or(0);
+
         js_sys::Reflect::set(&info, &"memoryPages".into(), &memory_pages.into()).unwrap();
         
         info.into()
@@ -195,20 +107,68 @@ impl ImageDecryptor {
 }
 
 impl ImageDecryptor {
-    /// 内部解密方法
-    fn decrypt_bytes(&self, encrypted_data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, String> {
-        // 创建解密器
-        let mut cipher = Aes256CbcDec::new_from_slices(key, iv)
-            .map_err(|e| format!("创建解密器失败: {}", e))?;
+    /// 内部解密方法 - 统一的高性能解密实现
+    /// 减少数据复制，提高性能，统一错误处理
+    fn decrypt_bytes_internal(&self, encrypted_data: &Uint8Array, key_base64: &str, iv_base64: &str) -> Result<Uint8Array, String> {
+        // 统一的输入验证
+        if key_base64.is_empty() {
+            return Err("密钥不能为空".to_string());
+        }
+        
+        if iv_base64.is_empty() {
+            return Err("IV不能为空".to_string());
+        }
+        
+        if encrypted_data.length() == 0 {
+            return Err("加密数据不能为空".to_string());
+        }
+        
+        // 验证加密数据长度（必须是16字节的倍数）
+        if encrypted_data.length() % 16 != 0 {
+            return Err("加密数据长度必须是16字节的倍数".to_string());
+        }
 
-        // 复制数据用于原地解密
+        // 解码密钥和IV
+        let key = general_purpose::STANDARD
+            .decode(key_base64)
+            .map_err(|e| format!("密钥Base64解码失败: {}", e))?;
+        
+        let iv = general_purpose::STANDARD
+            .decode(iv_base64)
+            .map_err(|e| format!("IV Base64解码失败: {}", e))?;
+
+        // 验证长度
+        if key.len() != 32 {
+            return Err(format!("密钥长度必须为32字节，当前为{}字节", key.len()));
+        }
+        
+        if iv.len() != 16 {
+            return Err(format!("IV长度必须为16字节，当前为{}字节", iv.len()));
+        }
+
+        // 创建解密器
+        let cipher = Aes256CbcDec::new_from_slices(&key, &iv)
+            .map_err(|e| format!("AES解密器初始化失败: {}", e))?;
+
+        // 直接从Uint8Array创建buffer，避免额外复制
         let mut buffer = encrypted_data.to_vec();
+        
+        // 验证buffer不为空
+        if buffer.is_empty() {
+            return Err("解密缓冲区为空".to_string());
+        }
         
         // 执行解密并移除填充
         let decrypted = cipher.decrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buffer)
-            .map_err(|e| format!("解密失败: {}", e))?;
+            .map_err(|_| "PKCS7填充验证失败，数据可能已损坏".to_string())?;
 
-        Ok(decrypted.to_vec())
+        // 验证解密结果
+        if decrypted.is_empty() {
+            return Err("解密结果为空".to_string());
+        }
+
+        // 直接创建Uint8Array，避免额外的to_vec()调用
+        Ok(Uint8Array::from(decrypted))
     }
 
     /// 检测图片文件类型
@@ -257,7 +217,7 @@ pub fn check_simd_support() -> bool {
 /// 工具函数：获取WASM模块信息
 #[wasm_bindgen]
 pub fn get_wasm_info() -> JsValue {
-    let mut info = js_sys::Object::new();
+    let info = js_sys::Object::new();
     
     js_sys::Reflect::set(&info, &"version".into(), &"1.0.0".into()).unwrap();
     js_sys::Reflect::set(&info, &"simdSupport".into(), &check_simd_support().into()).unwrap();

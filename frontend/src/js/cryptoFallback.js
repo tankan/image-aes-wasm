@@ -1,4 +1,5 @@
 import CryptoJS from 'crypto-js';
+import { getConfig } from './config.js';
 
 /**
  * CryptoJS 降级解密器
@@ -19,6 +20,9 @@ class CryptoFallback {
    * @returns {Promise<Uint8Array>} 解密后的数据
    */
   async decryptImage(encryptedData, keyBase64, ivBase64) {
+    // 统一的输入验证
+    this._validateDecryptionInputs(encryptedData, keyBase64, ivBase64);
+
     try {
       // 转换输入数据
       const encryptedWordArray = this._uint8ArrayToWordArray(encryptedData);
@@ -27,10 +31,10 @@ class CryptoFallback {
 
       // 验证密钥和IV长度
       if (key.sigBytes !== 32) {
-        throw new Error('密钥长度必须为32字节');
+        throw new Error(`密钥长度必须为32字节，当前为${key.sigBytes}字节`);
       }
       if (iv.sigBytes !== 16) {
-        throw new Error('IV长度必须为16字节');
+        throw new Error(`IV长度必须为16字节，当前为${iv.sigBytes}字节`);
       }
 
       // 执行解密
@@ -44,6 +48,11 @@ class CryptoFallback {
         }
       );
 
+      // 验证解密结果
+      if (!decrypted || decrypted.sigBytes === 0) {
+        throw new Error('解密结果为空或无效');
+      }
+
       // 转换结果为 Uint8Array
       const decryptedBytes = this._wordArrayToUint8Array(decrypted);
       
@@ -54,50 +63,70 @@ class CryptoFallback {
   }
 
   /**
-   * 分块解密（模拟异步处理）
+   * 统一输入验证（与ImageDecryptor保持一致）
+   * @private
+   */
+  _validateDecryptionInputs(encryptedData, keyBase64, ivBase64) {
+    if (!encryptedData || encryptedData.length === 0) {
+      throw new Error('加密数据不能为空');
+    }
+
+    if (!keyBase64 || keyBase64.trim() === '') {
+      throw new Error('密钥不能为空');
+    }
+
+    if (!ivBase64 || ivBase64.trim() === '') {
+      throw new Error('IV不能为空');
+    }
+
+    // 验证Base64格式
+    try {
+      const keyBytes = atob(keyBase64);
+      if (keyBytes.length !== 32) {
+        throw new Error(`密钥长度必须为32字节，当前为${keyBytes.length}字节`);
+      }
+    } catch (e) {
+      throw new Error('密钥Base64格式无效');
+    }
+
+    try {
+      const ivBytes = atob(ivBase64);
+      if (ivBytes.length !== 16) {
+        throw new Error(`IV长度必须为16字节，当前为${ivBytes.length}字节`);
+      }
+    } catch (e) {
+      throw new Error('IV Base64格式无效');
+    }
+
+    // 验证加密数据长度（必须是16字节的倍数）
+    if (encryptedData.length % 16 !== 0) {
+      throw new Error('加密数据长度必须是16字节的倍数');
+    }
+  }
+
+  /**
+   * 渐进式解密图片（带进度回调）
+   * 注意：由于AES-CBC特性，无法真正分块，此函数模拟进度
    * @param {Uint8Array} encryptedData - 加密的数据
    * @param {string} keyBase64 - Base64编码的密钥
    * @param {string} ivBase64 - Base64编码的IV
-   * @param {Function} progressCallback - 进度回调
+   * @param {Function} progressCallback - 进度回调函数
    * @returns {Promise<Uint8Array>} 解密后的数据
    */
-  async decryptImageChunked(encryptedData, keyBase64, ivBase64, progressCallback) {
+  async decryptImageProgressive(encryptedData, keyBase64, ivBase64, progressCallback) {
     try {
-      // 报告开始进度
-      if (progressCallback) {
-        progressCallback(0);
-      }
-
-      // 模拟分块处理（实际上CryptoJS不支持真正的流式解密）
-      const chunkSize = 1024 * 1024; // 1MB
-      const totalSize = encryptedData.length;
+      // 初始进度
+      if (progressCallback) progressCallback(0);
       
-      // 分块处理进度更新
-      for (let i = 0; i < totalSize; i += chunkSize) {
-        const progress = Math.min((i / totalSize) * 50, 50); // 前50%用于"分块"
-        if (progressCallback) {
-          progressCallback(progress);
-        }
-        
-        // 让出控制权，避免阻塞UI
-        await this._sleep(10);
-      }
-
-      // 执行实际解密
-      if (progressCallback) {
-        progressCallback(50);
-      }
-
+      // 执行解密
       const result = await this.decryptImage(encryptedData, keyBase64, ivBase64);
-
+      
       // 完成进度
-      if (progressCallback) {
-        progressCallback(100);
-      }
-
+      if (progressCallback) progressCallback(100);
+      
       return result;
     } catch (error) {
-      throw new Error(`分块解密失败: ${error.message}`);
+      throw new Error(`CryptoJS渐进式解密失败: ${error.message}`);
     }
   }
 
@@ -107,21 +136,18 @@ class CryptoFallback {
    * @returns {Object} 验证结果
    */
   verifyDecryptedImage(decryptedData) {
-    if (!decryptedData || decryptedData.length < 8) {
-      return {
-        isValid: false,
-        fileType: '',
-        fileSize: 0
-      };
-    }
-
-    const fileType = this._detectImageType(decryptedData);
+    const minSize = getConfig('decryption.minResultSize', 100); // 从配置获取最小大小
+    const maxSize = getConfig('decryption.maxResultSize', 50 * 1024 * 1024); // 从配置获取最大大小（50MB）
     
-    return {
-      isValid: fileType !== '',
-      fileType: fileType,
-      fileSize: decryptedData.length
-    };
+    if (!decryptedData || decryptedData.length < minSize) {
+      return { isValid: false, reason: `数据太小，小于${minSize}字节` };
+    }
+    
+    if (decryptedData.length > maxSize) {
+      return { isValid: false, reason: `数据太大，超过${maxSize}字节` };
+    }
+    
+    return { isValid: true };
   }
 
   /**

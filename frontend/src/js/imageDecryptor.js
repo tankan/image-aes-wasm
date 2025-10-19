@@ -1,5 +1,8 @@
 import wasmLoader from './wasmLoader.js';
+import { globalErrorHandler, AppError, ErrorTypes, ErrorSeverity } from './errorHandler.js';
 import CryptoFallback from './cryptoFallback.js';
+import CryptoOptimized from './cryptoOptimized.js';
+import { getConfig } from './config.js';
 
 /**
  * 图片解密器
@@ -9,7 +12,9 @@ class ImageDecryptor {
   constructor() {
     this.wasmDecryptor = null;
     this.fallbackDecryptor = new CryptoFallback();
+    this.optimizedDecryptor = new CryptoOptimized();
     this.preferWasm = true;
+    this.useOptimizedCrypto = true; // 默认使用优化版
     this.capabilities = null;
   }
 
@@ -77,81 +82,120 @@ class ImageDecryptor {
   }
 
   /**
-   * 解密图片
-   * @param {Uint8Array} encryptedData - 加密数据
-   * @param {string} keyBase64 - Base64密钥
-   * @param {string} ivBase64 - Base64 IV
+   * 解密图片数据
+   * 统一的解密接口，自动选择最优的解密方式
+   * @param {Uint8Array} encryptedData - 加密的数据
+   * @param {string} keyBase64 - Base64编码的密钥
+   * @param {string} ivBase64 - Base64编码的IV
    * @param {Object} options - 解密选项
+   * @param {Function} options.progressCallback - 进度回调函数
+   * @param {number} options.timeout - 超时时间（毫秒）
    * @returns {Promise<Uint8Array>} 解密后的数据
    */
   async decryptImage(encryptedData, keyBase64, ivBase64, options = {}) {
     const {
-      useChunked = false,
-      progressCallback = null,
-      timeout = 30000 // 30秒超时
+      progressCallback,
+      timeout = getConfig('decryption.timeout', 30000) // 从配置获取超时时间
     } = options;
 
     // 参数验证
     if (!encryptedData || !keyBase64 || !ivBase64) {
-      throw new Error('缺少必要的解密参数');
+      throw new AppError(
+        '缺少必要的解密参数',
+        ErrorTypes.VALIDATION_FAILED,
+        ErrorSeverity.HIGH
+      );
     }
 
-    // 设置超时
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('解密超时')), timeout);
-    });
+    // 使用智能降级处理
+    return await globalErrorHandler.handleWithFallback(
+      // 主要操作：WASM解密
+      async () => {
+        if (!this.wasmDecryptor) {
+          throw new AppError(
+            'WASM解密器未初始化',
+            ErrorTypes.WASM_INIT_FAILED,
+            ErrorSeverity.HIGH
+          );
+        }
 
-    try {
-      let decryptPromise;
-
-      if (this.wasmDecryptor) {
-        // 使用 WASM 解密
-        if (useChunked) {
-          decryptPromise = this._decryptWithWasmChunked(
+        let result;
+        if (progressCallback) {
+          result = await this._decryptWithWasmProgressive(
             encryptedData, keyBase64, ivBase64, progressCallback
           );
         } else {
-          decryptPromise = this._decryptWithWasm(
+          result = await this._decryptWithWasm(
             encryptedData, keyBase64, ivBase64
           );
         }
-      } else {
-        // 使用 CryptoJS 解密
-        if (useChunked) {
-          decryptPromise = this.fallbackDecryptor.decryptImageChunked(
-            encryptedData, keyBase64, ivBase64, progressCallback
+
+        // 验证解密结果
+        if (!result || result.length === 0) {
+          throw new AppError(
+            'Decryption result is empty',
+            ErrorTypes.DECRYPTION_FAILED,
+            ErrorSeverity.HIGH,
+            { 
+              originalSize: encryptedData.length,
+              resultSize: result?.length || 0,
+              minExpectedSize: getConfig('decryption.minResultSize', 100) // 从配置获取最小期望大小
+            }
           );
+        }
+        
+        const verification = this.verifyDecryptedImage(result);
+        if (!verification.isValid) {
+          throw new AppError(
+            '解密结果验证失败，可能是密钥错误或数据损坏',
+            ErrorTypes.VALIDATION_FAILED,
+            ErrorSeverity.HIGH
+          );
+        }
+
+        return result;
+      },
+      // 降级操作：优化版CryptoJS解密
+      async () => {
+        console.warn('使用优化版CryptoJS降级解密');
+        const cryptoDecryptor = this.useOptimizedCrypto ? 
+          this.optimizedDecryptor : this.fallbackDecryptor;
+          
+        let result;
+        if (progressCallback) {
+          if (this.useOptimizedCrypto) {
+            result = await cryptoDecryptor.decryptImageProgressive(
+              encryptedData, keyBase64, ivBase64, progressCallback
+            );
+          } else {
+            result = await this.fallbackDecryptor.decryptImageProgressive(
+              encryptedData, keyBase64, ivBase64, progressCallback
+            );
+          }
         } else {
-          decryptPromise = this.fallbackDecryptor.decryptImage(
+          result = await cryptoDecryptor.decryptImage(
             encryptedData, keyBase64, ivBase64
           );
         }
-      }
 
-      const result = await Promise.race([decryptPromise, timeoutPromise]);
-      
-      // 验证解密结果
-      const verification = this.verifyDecryptedImage(result);
-      if (!verification.isValid) {
-        throw new Error('解密结果验证失败，可能是密钥错误或数据损坏');
-      }
-
-      return result;
-    } catch (error) {
-      // 如果WASM解密失败，尝试降级到CryptoJS
-      if (this.wasmDecryptor && !error.message.includes('超时')) {
-        console.warn('WASM解密失败，尝试CryptoJS降级:', error.message);
-        try {
-          return await this.fallbackDecryptor.decryptImage(
-            encryptedData, keyBase64, ivBase64
+        // 验证解密结果
+        const verification = this.verifyDecryptedImage(result);
+        if (!verification.isValid) {
+          throw new AppError(
+            '降级解密结果验证失败',
+            ErrorTypes.VALIDATION_FAILED,
+            ErrorSeverity.HIGH
           );
-        } catch (fallbackError) {
-          throw new Error(`解密失败: WASM(${error.message}) CryptoJS(${fallbackError.message})`);
         }
+
+        return result;
+      },
+      {
+        operation: 'decryptImage',
+        dataSize: encryptedData.length,
+        hasProgressCallback: !!progressCallback
       }
-      
-      throw error;
-    }
+    );
   }
 
   /**
@@ -168,7 +212,19 @@ class ImageDecryptor {
       }
     }
     
-    return this.fallbackDecryptor.verifyDecryptedImage(decryptedData);
+    // 降级验证逻辑
+    const minSize = getConfig('decryption.minResultSize', 100); // 从配置获取最小大小
+    const maxSize = getConfig('decryption.maxResultSize', 50 * 1024 * 1024); // 从配置获取最大大小（50MB）
+    
+    if (!decryptedData || decryptedData.length < minSize) {
+      return { isValid: false, reason: `数据太小，小于${minSize}字节` };
+    }
+    
+    if (decryptedData.length > maxSize) {
+      return { isValid: false, reason: `数据太大，超过${maxSize}字节` };
+    }
+    
+    return { isValid: true };
   }
 
   /**
@@ -176,7 +232,13 @@ class ImageDecryptor {
    * @returns {string} 'wasm' | 'fallback'
    */
   getCurrentMode() {
-    return this.wasmDecryptor ? 'wasm' : 'fallback';
+    if (this.wasmDecryptor) {
+      return 'wasm';
+    } else if (this.useOptimizedCrypto) {
+      return 'optimized-crypto';
+    } else {
+      return 'fallback';
+    }
   }
 
   /**
@@ -184,25 +246,25 @@ class ImageDecryptor {
    * @returns {Object} 性能统计
    */
   getPerformanceInfo() {
-    const baseInfo = {
+    const info = {
       currentMode: this.getCurrentMode(),
+      wasmAvailable: !!this.wasmDecryptor,
+      optimizedCryptoEnabled: this.useOptimizedCrypto,
       capabilities: this.capabilities,
-      wasmLoaded: !!this.wasmDecryptor
+      memory: this._getMemoryInfo()
     };
 
-    if (this.wasmDecryptor) {
-      try {
-        const wasmInfo = this.wasmDecryptor.get_performance_info();
-        return { ...baseInfo, ...wasmInfo };
-      } catch (error) {
-        console.warn('获取WASM性能信息失败:', error);
-      }
+    // 添加优化版CryptoJS的性能信息
+    if (this.useOptimizedCrypto) {
+      info.optimizedCryptoInfo = this.optimizedDecryptor.getPerformanceInfo();
     }
 
-    return {
-      ...baseInfo,
-      ...this.fallbackDecryptor.getPerformanceInfo()
-    };
+    // 添加降级解密器信息
+    if (this.fallbackDecryptor.getPerformanceInfo) {
+      info.fallbackInfo = this.fallbackDecryptor.getPerformanceInfo();
+    }
+
+    return info;
   }
 
   /**
@@ -219,10 +281,17 @@ class ImageDecryptor {
     // 测试当前模式
     if (this.wasmDecryptor) {
       try {
-        // 简单的WASM测试
+        // 简单的WASM测试 - 使用随机生成的测试密钥
         const testData = new Uint8Array(16).fill(1);
-        const testKey = 'dGVzdGtleTE2Ynl0ZXNsb25ndGVzdGtleTE2Ynl0ZXM='; // 32字节
-        const testIv = 'dGVzdGl2MTZieXRlc2xvbmc='; // 16字节
+        
+        // 生成随机测试密钥和IV
+        const testKeyBytes = new Uint8Array(32);
+        const testIvBytes = new Uint8Array(16);
+        crypto.getRandomValues(testKeyBytes);
+        crypto.getRandomValues(testIvBytes);
+        
+        const testKey = btoa(String.fromCharCode(...testKeyBytes));
+        const testIv = btoa(String.fromCharCode(...testIvBytes));
         
         await this._decryptWithWasm(testData, testKey, testIv);
         results.wasm = { success: true };
@@ -231,7 +300,18 @@ class ImageDecryptor {
       }
     }
 
-    // 测试CryptoJS
+    // 测试优化版CryptoJS
+    if (this.useOptimizedCrypto) {
+      try {
+        results.optimizedCrypto = {
+          success: await this.optimizedDecryptor.testDecryption()
+        };
+      } catch (error) {
+        results.optimizedCrypto = { success: false, error: error.message };
+      }
+    }
+
+    // 测试标准CryptoJS
     try {
       results.fallback = {
         success: await this.fallbackDecryptor.testDecryption()
@@ -287,28 +367,175 @@ class ImageDecryptor {
    * @private
    */
   async _decryptWithWasm(encryptedData, keyBase64, ivBase64) {
-    const uint8Array = new Uint8Array(encryptedData);
-    const result = this.wasmDecryptor.decrypt_image(uint8Array, keyBase64, ivBase64);
-    return new Uint8Array(result);
+    if (!this.wasmDecryptor) {
+      throw new AppError(
+        'WASM解密器未初始化',
+        ErrorTypes.WASM_NOT_INITIALIZED,
+        ErrorSeverity.HIGH
+      );
+    }
+
+    // 统一的输入验证
+    this._validateDecryptionInputs(encryptedData, keyBase64, ivBase64);
+
+    try {
+      const uint8Array = new Uint8Array(encryptedData);
+      const result = this.wasmDecryptor.decrypt_image(uint8Array, keyBase64, ivBase64);
+      
+      if (!result) {
+        throw new AppError(
+          'WASM解密返回空结果',
+          ErrorTypes.WASM_EXECUTION_FAILED,
+          ErrorSeverity.HIGH
+        );
+      }
+      
+      return new Uint8Array(result);
+    } catch (error) {
+      // 统一错误处理
+      const errorMessage = this._normalizeErrorMessage(error);
+      throw new AppError(
+        `WASM解密失败: ${errorMessage}`,
+        ErrorTypes.WASM_EXECUTION_FAILED,
+        ErrorSeverity.HIGH,
+        error
+      );
+    }
   }
 
   /**
-   * WASM分块解密
+   * 使用WASM进行渐进式解密（带进度回调）
    * @private
    */
-  async _decryptWithWasmChunked(encryptedData, keyBase64, ivBase64, progressCallback) {
-    const uint8Array = new Uint8Array(encryptedData);
+  async _decryptWithWasmProgressive(encryptedData, keyBase64, ivBase64, progressCallback) {
+    // 统一的输入验证
+    this._validateDecryptionInputs(encryptedData, keyBase64, ivBase64);
+
+    try {
+      // 初始进度
+      if (progressCallback) progressCallback(0);
+      
+      // 使用优化的WASM解密
+      const result = await this.wasmDecryptor.decrypt_image_optimized(
+        encryptedData, keyBase64, ivBase64
+      );
+      
+      // 完成进度
+      if (progressCallback) progressCallback(100);
+      
+      return result;
+    } catch (error) {
+      // 统一错误处理
+      const errorMessage = this._normalizeErrorMessage(error);
+      throw new AppError(
+        `WASM渐进式解密失败: ${errorMessage}`,
+        ErrorTypes.WASM_EXECUTION_FAILED,
+        ErrorSeverity.HIGH,
+        error
+      );
+    }
+  }
+
+  /**
+   * 统一输入验证
+   * @private
+   */
+  _validateDecryptionInputs(encryptedData, keyBase64, ivBase64) {
+    if (!encryptedData || encryptedData.length === 0) {
+      throw new AppError(
+        '加密数据不能为空',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+
+    if (!keyBase64 || keyBase64.trim() === '') {
+      throw new AppError(
+        '密钥不能为空',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+
+    if (!ivBase64 || ivBase64.trim() === '') {
+      throw new AppError(
+        'IV不能为空',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+
+    // 验证Base64格式
+    try {
+      const keyBytes = atob(keyBase64);
+      if (keyBytes.length !== 32) {
+        throw new AppError(
+          `密钥长度必须为32字节，当前为${keyBytes.length}字节`,
+          ErrorTypes.INVALID_INPUT,
+          ErrorSeverity.MEDIUM
+        );
+      }
+    } catch (e) {
+      throw new AppError(
+        '密钥Base64格式无效',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+
+    try {
+      const ivBytes = atob(ivBase64);
+      if (ivBytes.length !== 16) {
+        throw new AppError(
+          `IV长度必须为16字节，当前为${ivBytes.length}字节`,
+          ErrorTypes.INVALID_INPUT,
+          ErrorSeverity.MEDIUM
+        );
+      }
+    } catch (e) {
+      throw new AppError(
+        'IV Base64格式无效',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+
+    // 验证加密数据长度（必须是16字节的倍数）
+    if (encryptedData.length % 16 !== 0) {
+      throw new AppError(
+        '加密数据长度必须是16字节的倍数',
+        ErrorTypes.INVALID_INPUT,
+        ErrorSeverity.MEDIUM
+      );
+    }
+  }
+
+  /**
+   * 标准化错误消息
+   * @private
+   */
+  _normalizeErrorMessage(error) {
+    if (!error) return '未知错误';
     
-    // 包装进度回调
-    const wrappedCallback = progressCallback ? (progress) => {
-      progressCallback(progress);
-    } : null;
+    // 如果错误消息为undefined或空，提供默认消息
+    if (!error.message || error.message === 'undefined') {
+      if (error.toString && error.toString() !== '[object Object]') {
+        return error.toString();
+      }
+      return '解密过程中发生未知错误';
+    }
     
-    const result = await this.wasmDecryptor.decrypt_image_chunked(
-      uint8Array, keyBase64, ivBase64, wrappedCallback
-    );
-    
-    return new Uint8Array(result);
+    return error.message;
+  }
+
+  /**
+   * 检查是否为超时错误
+   * @private
+   */
+  _isTimeoutError(error) {
+    return error.message.includes('超时') || 
+           error.message.includes('timeout') ||
+           error.name === 'TimeoutError';
   }
 
   /**
@@ -382,6 +609,11 @@ class ImageDecryptor {
     if (this.wasmDecryptor) {
       // WASM对象通常由垃圾回收器处理
       this.wasmDecryptor = null;
+    }
+    
+    // 清理优化版CryptoJS的缓存
+    if (this.optimizedDecryptor) {
+      this.optimizedDecryptor.cleanup();
     }
     
     wasmLoader.unloadWasm();
